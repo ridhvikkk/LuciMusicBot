@@ -1,122 +1,157 @@
-const { ApplicationCommandOptionType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const db = require("../mongoDB");
+/*
+
+  ________.__                        _____.___.___________
+ /  _____/|  | _____    ____  ____   \__  |   |\__    ___/
+/   \  ___|  | \__  \ _/ ___\/ __ \   /   |   |  |    |   
+\    \_\  \  |__/ __ \\  \__\  ___/   \____   |  |    |   
+ \______  /____(____  /\___  >___  >  / ______|  |____|   
+        \/          \/     \/    \/   \/                  
+
+╔════════════════════════════════════════════════════════════════════════╗
+║                                                                        ║
+║  ## Created by GlaceYT!                                                ║
+║  ## Feel free to utilize any portion of the code                       ║
+║  ## DISCORD :  https://discord.com/invite/xQF9f9yUEM                   ║
+║  ## YouTube : https://www.youtube.com/@GlaceYt                         ║
+║                                                                        ║
+╚════════════════════════════════════════════════════════════════════════╝
 
 
-let selectedThumbnailURL;
+*/
+const { ApplicationCommandOptionType, EmbedBuilder } = require('discord.js');
+
+const queueNames = [];
+
+async function play(client, interaction) {
+    try {
+        const query = interaction.options.getString('name');
+
+        const player = client.riffy.createConnection({
+            guildId: interaction.guildId,
+            voiceChannel: interaction.member.voice.channelId,
+            textChannel: interaction.channelId,
+            deaf: true
+        });
+
+        await interaction.deferReply();
+
+        // Try resolving the query and log the entire response for debugging
+        const resolve = await client.riffy.resolve({ query: query, requester: interaction.user });
+        console.log('Resolve response:', resolve);
+
+        // Ensure the response structure is as expected
+        if (!resolve || typeof resolve !== 'object') {
+            throw new TypeError('Resolve response is not an object');
+        }
+
+        const { loadType, tracks, playlistInfo } = resolve;
+
+        if (!Array.isArray(tracks)) {
+            console.error('Expected tracks to be an array:', tracks);
+            throw new TypeError('Expected tracks to be an array');
+        }
+
+        if (loadType === 'PLAYLIST_LOADED') {
+            for (const track of tracks) {
+                track.info.requester = interaction.user;
+                player.queue.add(track);
+                queueNames.push(track.info.title);
+            }
+
+            if (!player.playing && !player.paused) player.play();
+
+        } else if (loadType === 'SEARCH_RESULT' || loadType === 'TRACK_LOADED') {
+            const track = tracks.shift();
+            track.info.requester = interaction.user;
+
+            player.queue.add(track);
+            queueNames.push(track.info.title);
+
+            if (!player.playing && !player.paused) player.play();
+        } else {
+            const errorEmbed = new EmbedBuilder()
+                .setColor('#ff0000')
+                .setTitle('Error')
+                .setDescription('There are no results found.');
+
+            await interaction.editReply({ embeds: [errorEmbed] });
+            return;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        const embeds = [
+            new EmbedBuilder()
+                .setColor('#4d9fd6')
+                .setAuthor({
+                    name: 'Request Update!',
+                    iconURL: 'https://cdn.discordapp.com/attachments/1230824451990622299/1236794583732457473/7828-verify-ak.gif',
+                })
+                .setDescription('➡️ **Your request has been successfully processed.**\n➡️** Please use the buttons to control the queue**'),
+
+            new EmbedBuilder()
+                .setColor('#ffea00')
+                .setAuthor({
+                    name: 'Request Update!',
+                    iconURL: 'https://cdn.discordapp.com/attachments/1230824451990622299/1236802032938127470/4104-verify-yellow.gif',
+                })
+                .setDescription('➡️ **Your request has been successfully processed.**\n➡️** Please use the buttons to control the queue**'),
+
+            new EmbedBuilder()
+                .setColor('#FF0000')
+                .setAuthor({
+                    name: 'Request Update!',
+                    iconURL: 'https://cdn.discordapp.com/attachments/1230824451990622299/1236802049190920202/4104-verify-red.gif',
+                })
+                .setDescription('➡️ **Your request has been successfully processed.**\n➡️** Please use the buttons to control the queue**')
+        ];
+
+        const randomIndex = Math.floor(Math.random() * embeds.length);
+        await interaction.followUp({ embeds: [embeds[randomIndex]] });
+
+    } catch (error) {
+        console.error('Error processing play command:', error);
+        const errorEmbed = new EmbedBuilder()
+            .setColor('#ff0000')
+            .setTitle('Error')
+            .setDescription('An error occurred while processing your request.');
+
+        await interaction.editReply({ embeds: [errorEmbed] });
+    }
+}
 
 module.exports = {
-  name: "play",
-  description: "come one let's hear some music!!",
-  permissions: "0x0000000000000800",
-  options: [{
-    name: 'name',
-    description: 'Type the name of the music you want to play.',
-    type: ApplicationCommandOptionType.String,
-    required: true
-  }],
-  voiceChannel: true,
-  run: async (client, interaction) => {
-    try {
-
-      const name = interaction.options.getString('name')
-      if (!name) return interaction.reply({ content: `❌ Enter a valid song name.`, ephemeral: true }).catch(e => { });
-      let res;
-      try {
-        res = await client.player.search(name, {
-          member: interaction.member,
-          textChannel: interaction.channel,
-          interaction
-        });
-      } catch (e) {
-        return interaction.editReply({ content: `❌ No results` }).catch(e => { });
-      }
-
-      if (!res || !res.length || !res.length > 1) return interaction.reply({ content: `❌ No results`, ephemeral: true }).catch(e => { });
-
-      const embed = new EmbedBuilder();
-      embed.setColor(client.config.embedColor);
-      embed.setTitle(`Found: ${name}`);
-
-      const maxTracks = res.slice(0, 10);
-
-      let track_button_creator = maxTracks.map((song, index) => {
-        return new ButtonBuilder()
-          .setLabel(`${index + 1}`)
-          .setStyle(ButtonStyle.Secondary)
-          .setCustomId(`${index + 1}`);
-      });
-
-      let buttons1;
-      let buttons2;
-      if (track_button_creator.length > 10) {
-        buttons1 = new ActionRowBuilder().addComponents(track_button_creator.slice(0, 5));
-        buttons2 = new ActionRowBuilder().addComponents(track_button_creator.slice(5, 10));
-      } else {
-        if (track_button_creator.length > 5) {
-          buttons1 = new ActionRowBuilder().addComponents(track_button_creator.slice(0, 5));
-          buttons2 = new ActionRowBuilder().addComponents(track_button_creator.slice(5, Number(track_button_creator.length)));
-        } else {
-          buttons1 = new ActionRowBuilder().addComponents(track_button_creator);
-        }
-      }
-
-      let cancel = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setLabel("Cancel")
-          .setStyle(ButtonStyle.Danger)
-          .setCustomId('cancel')
-      );
-
-      embed.setDescription(`${maxTracks.map((song, i) => `**${i + 1}**. [${song.name}](${song.url}) | \`${song.uploader.name}\``).join('\n')}\n\n✨Choose a song from below!!`);
-
-      let code;
-      if (buttons1 && buttons2) {
-        code = { embeds: [embed], components: [buttons1, buttons2, cancel] };
-      } else {
-        code = { embeds: [embed], components: [buttons1, cancel] };
-      }
-
-      interaction.reply(code).then(async Message => {
-        const filter = i => i.user.id === interaction.user.id;
-        let collector = await Message.createMessageComponentCollector({ filter, time: 60000 });
-
-        collector.on('collect', async (button) => {
-          switch (button.customId) {
-            case 'cancel': {
-              embed.setDescription(`Search interrupted`);
-              await interaction.editReply({ embeds: [embed], components: [] }).catch(e => { });
-              return collector.stop();
-            }
-            break;
-            default: {
-              selectedThumbnailURL = maxTracks[Number(button.customId) - 1].thumbnail;
-              embed.setThumbnail(selectedThumbnailURL);
-              embed.setDescription(`**${res[Number(button.customId) - 1].name}**`);
-              await interaction.editReply({ embeds: [embed], components: [] }).catch(e => { });
-              try {
-                await client.player.play(interaction.member.voice.channel, res[Number(button.customId) - 1].url, {
-                  member: interaction.member,
-                  textChannel: interaction.channel,
-                  interaction
-                });
-              } catch (e) {
-                await interaction.editReply({ content: `❌ No results!`, ephemeral: true }).catch(e => { });
-              }
-              return collector.stop();
-            }
-          }
-        });
-
-        collector.on('end', (msg, reason) => {
-          if (reason === 'time') {
-            embed.setDescription(lang.msg80);
-            return interaction.editReply({ embeds: [embed], components: [] }).catch(e => { });
-          }
-        });
-      }).catch(e => { });
-    } catch (e) {
-      console.error(e);
-    }
-  },
+    name: "play",
+    description: "Add options too",
+    permissions: "0x0000000000000800",
+    options: [{
+        name: 'name',
+        description: 'Enter song name / link or playlist',
+        type: ApplicationCommandOptionType.String,
+        required: true
+    }],
+    run: play,
+    queueNames: queueNames
 };
-module.exports.selectedThumbnailURL = selectedThumbnailURL;
+
+
+/*
+
+  ________.__                        _____.___.___________
+ /  _____/|  | _____    ____  ____   \__  |   |\__    ___/
+/   \  ___|  | \__  \ _/ ___\/ __ \   /   |   |  |    |   
+\    \_\  \  |__/ __ \\  \__\  ___/   \____   |  |    |   
+ \______  /____(____  /\___  >___  >  / ______|  |____|   
+        \/          \/     \/    \/   \/                  
+
+╔════════════════════════════════════════════════════════════════════════╗
+║                                                                        ║
+║  ## Created by GlaceYT!                                                ║
+║  ## Feel free to utilize any portion of the code                       ║
+║  ## DISCORD :  https://discord.com/invite/xQF9f9yUEM                   ║
+║  ## YouTube : https://www.youtube.com/@GlaceYt                         ║
+║                                                                        ║
+╚════════════════════════════════════════════════════════════════════════╝
+
+
+*/
